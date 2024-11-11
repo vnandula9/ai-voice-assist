@@ -43,11 +43,8 @@ You are an AI assistant named Sophie, working at Voiza Restaurant. Your role is 
 // Some default constants used throughout the application
 const VOICE = "alloy"; // The voice for AI responses
 const PORT = process.env.PORT || 5050; // Set the port for the server (from environment or default to 5050)
-const ORDER_WEBHOOK_URL =
-    "https://a69e-68-99-227-40.ngrok-free.app/rest/voizaorderswebhook/v1/order";
-
-const CUST_WEBHOOK_URL =
-    "https://a69e-68-99-227-40.ngrok-free.app/rest/voizacustomerwebhook/v1"; // URL to Make.com webhook
+const MAKE_WEBHOOK_URL =
+    "https://fbb4-68-99-227-40.ngrok-free.app/rest/voizaorderswebhook/v1"; // URL to Make.com webhook
 
 // Session management: Store session data for ongoing calls
 const sessions = new Map(); // A Map to hold session data for each call
@@ -76,19 +73,15 @@ fastify.all("/incoming-call", async (request, reply) => {
 
     // Get all incoming call details from the request body or query string
     const twilioParams = request.body || request.query;
-    //console.log(
-    //  "Twilio Inbound Details:",
-    // JSON.stringify(twilioParams, null, 2),
-    //   ); // Log call details
+    console.log(
+        "Twilio Inbound Details:",
+        JSON.stringify(twilioParams, null, 2),
+    ); // Log call details
 
     // Extract caller's number and session ID (CallSid)
     const callerNumber = twilioParams.From || "Unknown"; // Caller phone number (default to 'Unknown' if missing)
-    const sessionId = twilioParams.CallSid;
-    let localNumber = callerNumber.startsWith("+1")
-        ? callerNumber.substring(2)
-        : callerNumber;
-    // Use Twilio's CallSid as a unique session ID
-    console.log("Caller Number:", localNumber);
+    const sessionId = twilioParams.CallSid; // Use Twilio's CallSid as a unique session ID
+    console.log("Caller Number:", callerNumber);
     console.log("Session ID (CallSid):", sessionId);
 
     // Send the caller's number to Make.com webhook to get a personalized first message
@@ -99,12 +92,11 @@ fastify.all("/incoming-call", async (request, reply) => {
         // Send a POST request to Make.com webhook to get a customized message for the caller
 
         const webhookResponse = await fetch(
-            `${CUST_WEBHOOK_URL}/customer/${localNumber}`,
+            `${MAKE_WEBHOOK_URL}/customer/{phone}`,
             {
                 method: "GET",
                 headers: {
                     "Content-Type": "application/json",
-                    Accept: "application/json",
                 },
             },
         );
@@ -139,7 +131,7 @@ fastify.all("/incoming-call", async (request, reply) => {
     let session = {
         transcript: "", // Store the conversation transcript here
         streamSid: null, // This will be set when the media stream starts
-        callerNumber: localNumber, // Store the caller's number
+        callerNumber: callerNumber, // Store the caller's number
         callDetails: twilioParams, // Save the Twilio call details
         firstMessage: firstMessage, // Save the personalized first message
     };
@@ -368,10 +360,11 @@ fastify.register(async (fastify) => {
                         // If the Q&A function is called
                         const { order_id, phone } = args;
                         try {
-                            const webhookResponse = await sendToWebhookGet(
-                                order_id,
-                                phone,
-                            );
+                            const webhookResponse = await sendToWebhook({
+                                route: "2", // Route 2 for getting existing order details
+                                data1: order_id,
+                                data2: phone,
+                            });
 
                             console.log("Webhook response:", webhookResponse);
 
@@ -479,7 +472,7 @@ fastify.register(async (fastify) => {
 
                 // Log other relevant events
                 if (LOG_EVENT_TYPES.includes(response.type)) {
-                    // console.log(`Received event: ${response.type}`, response);
+                    console.log(`Received event: ${response.type}`, response);
                 }
             } catch (error) {
                 console.error(
@@ -533,39 +526,12 @@ fastify.register(async (fastify) => {
         }
     });
 });
-// Function to send data to the Make.com webhook
-async function sendToWebhookGet(order_ID, phone) {
-    // console.log("Sending data to webhook:", JSON.stringify(payload, null, 2)); // Log the data being sent
-    try {
-        const response = await fetch(`${ORDER_WEBHOOK_URL}/${order_ID}`, {
-            method: "GET",
-            headers: {
-                "Content-Type": "application/json", // Set content type as JSON
-            }, // Send the payload as a JSON string
-        });
 
-        console.log("Webhook response status:", response.status);
-        if (response.ok) {
-            const responseText = await response.text(); // Get the text response from the webhook
-            console.log("Webhook response:", responseText);
-            return responseText; // Return the response
-        } else {
-            console.error(
-                "Failed to send data to webhook:",
-                response.statusText,
-            );
-            throw new Error("Webhook request failed"); // Throw an error if the request fails
-        }
-    } catch (error) {
-        console.error("Error sending data to webhook:", error); // Log any errors in the request
-        throw error;
-    }
-}
 // Function to send data to the Make.com webhook
 async function sendToWebhook(payload) {
     console.log("Sending data to webhook:", JSON.stringify(payload, null, 2)); // Log the data being sent
     try {
-        const response = await fetch(ORDER_WEBHOOK_URL / order, {
+        const response = await fetch(MAKE_WEBHOOK_URL / order, {
             method: "GET",
             headers: {
                 "Content-Type": "application/json", // Set content type as JSON

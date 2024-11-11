@@ -27,27 +27,31 @@ fastify.register(fastifyWs); // Register WebSocket support for real-time communi
 // System message template for the AI assistant's behavior and persona
 const SYSTEM_MESSAGE = `
 ### Role
-You are an AI assistant named Sophie, working at Voiza Restaurant. Your role is to take new orders, check existing order statuses, and answer customer questions about the menu.
+You are an AI assistant named Sophie, working at Bart's Automotive. Your role is to answer customer questions about automotive services and repairs, and assist with booking tow services.
 ### Persona
-- You have been a host at Voiza Restaurant for 3 years.
-- You are knowledgeable about the menu and current orders.
-- Your tone is friendly, attentive, and helpful.
+- You have been a receptionist at Bart's Automotive for over 5 years.
+- You are knowledgeable about both the company and cars in general.
+- Your tone is friendly, professional, and efficient.
+- You keep conversations focused and concise, bringing them back on topic if necessary.
+- You ask only one question at a time and respond promptly to avoid wasting the customer's time.
 ### Conversation Guidelines
-- Always greet customers warmly and maintain a medium-paced speaking style.
+- Always be polite and maintain a medium-paced speaking style.
 - When the conversation veers off-topic, gently bring it back with a polite reminder.
-### Order Handling
-1. For new orders, confirm each item and quantity.
-2. To retrieve an order, use the \`get_order\` function with the order ID or customer phone number.
+### First Message
+The first message you receive from the customer is their name and a summary of their last call, repeat this exact message to the customer as the greeting.
+### Handling FAQs
+Use the function \`question_and_answer\` to respond to common customer queries.
+### Booking a Tow
+When a customer needs a tow:
+1. Ask for their current address.
+2. Once you have the address, use the \`book_tow\` function to arrange the tow service.
 `;
 
 // Some default constants used throughout the application
 const VOICE = "alloy"; // The voice for AI responses
 const PORT = process.env.PORT || 5050; // Set the port for the server (from environment or default to 5050)
-const ORDER_WEBHOOK_URL =
-    "https://a69e-68-99-227-40.ngrok-free.app/rest/voizaorderswebhook/v1/order";
-
-const CUST_WEBHOOK_URL =
-    "https://a69e-68-99-227-40.ngrok-free.app/rest/voizacustomerwebhook/v1"; // URL to Make.com webhook
+const MAKE_WEBHOOK_URL =
+    "https://fbb4-68-99-227-40.ngrok-free.app/rest/voizaorderswebhook/v1"; // URL to Make.com webhook
 
 // Session management: Store session data for ongoing calls
 const sessions = new Map(); // A Map to hold session data for each call
@@ -76,48 +80,43 @@ fastify.all("/incoming-call", async (request, reply) => {
 
     // Get all incoming call details from the request body or query string
     const twilioParams = request.body || request.query;
-    //console.log(
-    //  "Twilio Inbound Details:",
-    // JSON.stringify(twilioParams, null, 2),
-    //   ); // Log call details
+    console.log(
+        "Twilio Inbound Details:",
+        JSON.stringify(twilioParams, null, 2),
+    ); // Log call details
 
     // Extract caller's number and session ID (CallSid)
     const callerNumber = twilioParams.From || "Unknown"; // Caller phone number (default to 'Unknown' if missing)
-    const sessionId = twilioParams.CallSid;
-    let localNumber = callerNumber.startsWith("+1")
-        ? callerNumber.substring(2)
-        : callerNumber;
-    // Use Twilio's CallSid as a unique session ID
-    console.log("Caller Number:", localNumber);
+    const sessionId = twilioParams.CallSid; // Use Twilio's CallSid as a unique session ID
+    console.log("Caller Number:", callerNumber);
     console.log("Session ID (CallSid):", sessionId);
 
     // Send the caller's number to Make.com webhook to get a personalized first message
     let firstMessage =
-        "Welcome to Voiza Restaurant. How can I assist you today?"; // Default first message
+        "Hello, welcome to Bart's Automotive. How can I assist you today?"; // Default first message
 
     try {
         // Send a POST request to Make.com webhook to get a customized message for the caller
 
         const webhookResponse = await fetch(
-            `${CUST_WEBHOOK_URL}/customer/${localNumber}`,
+            `${MAKE_WEBHOOK_URL}/callerNumber`,
             {
                 method: "GET",
                 headers: {
                     "Content-Type": "application/json",
-                    Accept: "application/json",
                 },
             },
         );
 
         if (webhookResponse.ok) {
             const responseText = await webhookResponse.text(); // Get the text response from the webhook
-            console.log("Voiza webhook response:", responseText);
+            console.log("Make.com webhook response:", responseText);
             try {
                 const responseData = JSON.parse(responseText); // Try to parse the response as JSON
-                if (responseData && responseData.Name) {
-                    firstMessage = responseData.Name; // If there's a firstMessage in the response, use it
+                if (responseData && responseData.firstMessage) {
+                    firstMessage = responseData.firstMessage; // If there's a firstMessage in the response, use it
                     console.log(
-                        "Parsed firstMessage from Voiza:",
+                        "Parsed firstMessage from Make.com:",
                         firstMessage,
                     );
                 }
@@ -127,19 +126,19 @@ fastify.all("/incoming-call", async (request, reply) => {
             }
         } else {
             console.error(
-                "Failed to send data to Voiza webhook:",
+                "Failed to send data to Make.com webhook:",
                 webhookResponse.statusText,
             ); // Log if webhook fails
         }
     } catch (error) {
-        console.error("Error sending data to Voiza webhook:", error); // Log if an error occurs in the request
+        console.error("Error sending data to Make.com webhook:", error); // Log if an error occurs in the request
     }
 
     // Set up a new session for this call
     let session = {
         transcript: "", // Store the conversation transcript here
         streamSid: null, // This will be set when the media stream starts
-        callerNumber: localNumber, // Store the caller's number
+        callerNumber: callerNumber, // Store the caller's number
         callDetails: twilioParams, // Save the Twilio call details
         firstMessage: firstMessage, // Save the personalized first message
     };
@@ -213,35 +212,27 @@ fastify.register(async (fastify) => {
                         // Define the tools (functions) the AI can use
                         {
                             type: "function",
-                            name: "new_order",
-                            description: "Place a new order with item details",
+                            name: "question_and_answer",
+                            description:
+                                "Get answers to customer questions about automotive services and repairs",
                             parameters: {
                                 type: "object",
                                 properties: {
-                                    items: {
-                                        type: "array",
-                                        items: { type: "string" },
-                                    },
-                                    quantities: {
-                                        type: "array",
-                                        items: { type: "integer" },
-                                    },
+                                    question: { type: "string" },
                                 },
-                                required: ["items", "quantities"],
+                                required: ["question"],
                             },
                         },
                         {
                             type: "function",
-                            name: "get_order",
-                            description:
-                                "Retrieve the details of an existing order",
+                            name: "book_tow",
+                            description: "Book a tow service for a customer",
                             parameters: {
                                 type: "object",
                                 properties: {
-                                    order_id: { type: "string" },
-                                    phone: { type: "string" },
+                                    address: { type: "string" },
                                 },
-                                required: ["order_id", "phone"],
+                                required: ["address"],
                             },
                         },
                     ],
@@ -364,14 +355,15 @@ fastify.register(async (fastify) => {
                     const functionName = response.name;
                     const args = JSON.parse(response.arguments); // Get the arguments passed to the function
 
-                    if (functionName === "get_order") {
+                    if (functionName === "question_and_answer") {
                         // If the Q&A function is called
-                        const { order_id, phone } = args;
+                        const question = args.question; // Get the question
                         try {
-                            const webhookResponse = await sendToWebhookGet(
-                                order_id,
-                                phone,
-                            );
+                            const webhookResponse = await sendToWebhook({
+                                route: "3", // Route 3 for Q&A
+                                data1: question,
+                                data2: threadId,
+                            });
 
                             console.log("Webhook response:", webhookResponse);
 
@@ -479,7 +471,7 @@ fastify.register(async (fastify) => {
 
                 // Log other relevant events
                 if (LOG_EVENT_TYPES.includes(response.type)) {
-                    // console.log(`Received event: ${response.type}`, response);
+                    console.log(`Received event: ${response.type}`, response);
                 }
             } catch (error) {
                 console.error(
@@ -533,40 +525,13 @@ fastify.register(async (fastify) => {
         }
     });
 });
-// Function to send data to the Make.com webhook
-async function sendToWebhookGet(order_ID, phone) {
-    // console.log("Sending data to webhook:", JSON.stringify(payload, null, 2)); // Log the data being sent
-    try {
-        const response = await fetch(`${ORDER_WEBHOOK_URL}/${order_ID}`, {
-            method: "GET",
-            headers: {
-                "Content-Type": "application/json", // Set content type as JSON
-            }, // Send the payload as a JSON string
-        });
 
-        console.log("Webhook response status:", response.status);
-        if (response.ok) {
-            const responseText = await response.text(); // Get the text response from the webhook
-            console.log("Webhook response:", responseText);
-            return responseText; // Return the response
-        } else {
-            console.error(
-                "Failed to send data to webhook:",
-                response.statusText,
-            );
-            throw new Error("Webhook request failed"); // Throw an error if the request fails
-        }
-    } catch (error) {
-        console.error("Error sending data to webhook:", error); // Log any errors in the request
-        throw error;
-    }
-}
 // Function to send data to the Make.com webhook
 async function sendToWebhook(payload) {
     console.log("Sending data to webhook:", JSON.stringify(payload, null, 2)); // Log the data being sent
     try {
-        const response = await fetch(ORDER_WEBHOOK_URL / order, {
-            method: "GET",
+        const response = await fetch(MAKE_WEBHOOK_URL, {
+            method: "POST",
             headers: {
                 "Content-Type": "application/json", // Set content type as JSON
             },
