@@ -37,12 +37,15 @@ You are an AI assistant named Sophie, working at Voiza Restaurant. Your role is 
 - When the conversation veers off-topic, gently bring it back with a polite reminder.
 ### Order Handling
 1. For new orders, confirm each item and quantity.
-2. To retrieve an order, use the \`get_order\` function with the order ID or customer phone number.
+2. To retrieve an order, use the \`get_order\` function with the  customer phone number.
+3.Use the function \`question_and_answer\` to respond to common customer queries.
 `;
 
 // Some default constants used throughout the application
 const VOICE = "alloy"; // The voice for AI responses
 const PORT = process.env.PORT || 5050; // Set the port for the server (from environment or default to 5050)
+const ROUTE_URL =
+    "https://451f-68-99-227-40.ngrok-free.app/rest/voizawebhook/v1/route";
 const ORDER_WEBHOOK_URL =
     "https://a69e-68-99-227-40.ngrok-free.app/rest/voizaorderswebhook/v1/order";
 
@@ -53,17 +56,7 @@ const CUST_WEBHOOK_URL =
 const sessions = new Map(); // A Map to hold session data for each call
 
 // Event types to log to the console for debugging purposes
-const LOG_EVENT_TYPES = [
-    "response.content.done",
-    "rate_limits.updated",
-    "response.done",
-    "input_audio_buffer.committed",
-    "input_audio_buffer.speech_stopped",
-    "input_audio_buffer.speech_started",
-    "session.created",
-    "response.text.done",
-    "conversation.item.input_audio_transcription.completed",
-];
+const LOG_EVENT_TYPES = ["conversation.item.created", "response.create"];
 
 // Root route - just for checking if the server is running
 fastify.get("/", async (request, reply) => {
@@ -98,24 +91,24 @@ fastify.all("/incoming-call", async (request, reply) => {
     try {
         // Send a POST request to Make.com webhook to get a customized message for the caller
 
-        const webhookResponse = await fetch(
-            `${CUST_WEBHOOK_URL}/customer/${localNumber}`,
-            {
-                method: "GET",
-                headers: {
-                    "Content-Type": "application/json",
-                    Accept: "application/json",
-                },
+        const webhookResponse = await fetch(ROUTE_URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
             },
-        );
+            body: JSON.stringify({
+                RouteID: "1", // Example data
+                data1: "New order received", // Additional data to send
+            }),
+        });
 
         if (webhookResponse.ok) {
             const responseText = await webhookResponse.text(); // Get the text response from the webhook
             console.log("Voiza webhook response:", responseText);
             try {
                 const responseData = JSON.parse(responseText); // Try to parse the response as JSON
-                if (responseData && responseData.Name) {
-                    firstMessage = responseData.Name; // If there's a firstMessage in the response, use it
+                if (responseData && responseData.Message) {
+                    //  firstMessage = responseData.Message; // If there's a firstMessage in the response, use it
                     console.log(
                         "Parsed firstMessage from Voiza:",
                         firstMessage,
@@ -213,6 +206,19 @@ fastify.register(async (fastify) => {
                         // Define the tools (functions) the AI can use
                         {
                             type: "function",
+                            name: "question_and_answer",
+                            description:
+                                "Get answers to customer questions about menu items ",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    question: { type: "string" },
+                                },
+                                required: ["question"],
+                            },
+                        },
+                        {
+                            type: "function",
                             name: "new_order",
                             description: "Place a new order with item details",
                             parameters: {
@@ -238,10 +244,9 @@ fastify.register(async (fastify) => {
                             parameters: {
                                 type: "object",
                                 properties: {
-                                    order_id: { type: "string" },
                                     phone: { type: "string" },
                                 },
-                                required: ["order_id", "phone"],
+                                required: ["phone"],
                             },
                         },
                     ],
@@ -272,7 +277,7 @@ fastify.register(async (fastify) => {
 
         // Open event for when the OpenAI WebSocket connection is established
         openAiWs.on("open", () => {
-            console.log("Connected to the OpenAI Realtime API"); // Log successful connection
+            console.log("OPEN 1 "); // Log successful connection
             openAiWsReady = true; // Set the flag to true
             sendSessionUpdate(); // Send session configuration
             sendFirstMessage(); // Send the first message if queued
@@ -362,23 +367,25 @@ fastify.register(async (fastify) => {
                 if (response.type === "response.function_call_arguments.done") {
                     console.log("Function called:", response);
                     const functionName = response.name;
+                    const callID = response.call_id;
                     const args = JSON.parse(response.arguments); // Get the arguments passed to the function
-
-                    if (functionName === "get_order") {
+                    if (functionName === "question_and_answer") {
                         // If the Q&A function is called
-                        const { order_id, phone } = args;
+                        const question = args.question; // Get the question
                         try {
-                            const webhookResponse = await sendToWebhookGet(
-                                order_id,
-                                phone,
-                            );
+                            const webhookResponse = await sendToWebhook({
+                                RouteID: "1", // Route 3 for Q&A
+                                data1: question,
+                                data2: threadId,
+                            });
 
-                            console.log("Webhook response:", webhookResponse);
+                            console.log("Webhook response 2:", webhookResponse);
 
                             // Parse the webhook response
                             const parsedResponse = JSON.parse(webhookResponse);
+                            // const answerMessage = `The customer name is Venkata and menu has following appetizers samosa , mirchi bajji `;
                             const answerMessage =
-                                parsedResponse.message ||
+                                parsedResponse.Message ||
                                 "I'm sorry, I couldn't find an answer to that question.";
 
                             // Update the threadId if it's provided in the response
@@ -386,12 +393,13 @@ fastify.register(async (fastify) => {
                                 threadId = parsedResponse.thread;
                                 console.log("Updated thread ID:", threadId);
                             }
-
+                            console.log("Answer to OPENAI :", answerMessage);
                             const functionOutputEvent = {
                                 type: "conversation.item.create",
                                 item: {
                                     type: "function_call_output",
                                     role: "system",
+                                    call_id: callID,
                                     output: answerMessage, // Provide the answer from the webhook
                                 },
                             };
@@ -411,47 +419,55 @@ fastify.register(async (fastify) => {
                             console.error("Error processing question:", error);
                             sendErrorResponse(); // Send an error response if something goes wrong
                         }
-                    } else if (functionName === "book_tow") {
-                        // If the book_tow function is called
-                        const address = args.address; // Get the address
+                    } else if (functionName === "get_order") {
+                        // If the Q&A function is called
+                        const phone = args.phone; // Get the question
                         try {
                             const webhookResponse = await sendToWebhook({
-                                route: "4", // Route 4 for booking a tow
-                                data1: session.callerNumber,
-                                data2: address, // Send the address to the webhook
+                                RouteID: "2", // Route 3 for Q&A
+                                data1: phone,
+                                data2: threadId,
                             });
 
-                            console.log("Webhook response:", webhookResponse);
+                            console.log("Webhook response 2:", webhookResponse);
 
                             // Parse the webhook response
                             const parsedResponse = JSON.parse(webhookResponse);
-                            const bookingMessage =
-                                parsedResponse.message ||
-                                "I'm sorry, I couldn't book the tow service at this time.";
+                            // const answerMessage = `The customer name is Venkata and menu has following appetizers samosa , mirchi bajji `;
+                            const answerMessage =
+                                parsedResponse.Message ||
+                                "I'm sorry, I couldn't find an answer to that question.";
 
+                            // Update the threadId if it's provided in the response
+                            if (parsedResponse.thread) {
+                                threadId = parsedResponse.thread;
+                                console.log("Updated thread ID:", threadId);
+                            }
+                            console.log("Answer to OPENAI :", answerMessage);
                             const functionOutputEvent = {
                                 type: "conversation.item.create",
                                 item: {
                                     type: "function_call_output",
                                     role: "system",
-                                    output: bookingMessage, // Provide the booking status
+                                    call_id: callID,
+                                    output: answerMessage, // Provide the answer from the webhook
                                 },
                             };
-                            openAiWs.send(JSON.stringify(functionOutputEvent)); // Send the booking status back to OpenAI
+                            openAiWs.send(JSON.stringify(functionOutputEvent)); // Send the answer back to OpenAI
 
-                            // Trigger AI to generate a response based on the booking
+                            // Trigger AI to generate a response based on the answer
                             openAiWs.send(
                                 JSON.stringify({
                                     type: "response.create",
                                     response: {
                                         modalities: ["text", "audio"],
-                                        instructions: `Inform the user about the tow booking status: ${bookingMessage}. Be concise and friendly.`,
+                                        instructions: `Respond to the user's question "${question}" based on this information: ${answerMessage}. Be concise and friendly.`,
                                     },
                                 }),
                             );
                         } catch (error) {
-                            console.error("Error booking tow:", error);
-                            sendErrorResponse(); // Send an error response if booking fails
+                            console.error("Error processing question:", error);
+                            sendErrorResponse(); // Send an error response if something goes wrong
                         }
                     }
                 }
@@ -565,8 +581,8 @@ async function sendToWebhookGet(order_ID, phone) {
 async function sendToWebhook(payload) {
     console.log("Sending data to webhook:", JSON.stringify(payload, null, 2)); // Log the data being sent
     try {
-        const response = await fetch(ORDER_WEBHOOK_URL / order, {
-            method: "GET",
+        const response = await fetch(ROUTE_URL, {
+            method: "POST",
             headers: {
                 "Content-Type": "application/json", // Set content type as JSON
             },

@@ -50,8 +50,7 @@ When a customer needs a tow:
 // Some default constants used throughout the application
 const VOICE = "alloy"; // The voice for AI responses
 const PORT = process.env.PORT || 5050; // Set the port for the server (from environment or default to 5050)
-const MAKE_WEBHOOK_URL =
-    "https://fbb4-68-99-227-40.ngrok-free.app/rest/voizaorderswebhook/v1"; // URL to Make.com webhook
+const MAKE_WEBHOOK_URL = "<your Make.com URL>"; // URL to Make.com webhook
 
 // Session management: Store session data for ongoing calls
 const sessions = new Map(); // A Map to hold session data for each call
@@ -97,16 +96,17 @@ fastify.all("/incoming-call", async (request, reply) => {
 
     try {
         // Send a POST request to Make.com webhook to get a customized message for the caller
-
-        const webhookResponse = await fetch(
-            `${MAKE_WEBHOOK_URL}/callerNumber`,
-            {
-                method: "GET",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+        const webhookResponse = await fetch(MAKE_WEBHOOK_URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
             },
-        );
+            body: JSON.stringify({
+                route: "1", // Route 1 is for getting the first message
+                data1: callerNumber, // Send caller's number
+                data2: "empty", // Extra data (not used here)
+            }),
+        });
 
         if (webhookResponse.ok) {
             const responseText = await webhookResponse.text(); // Get the text response from the webhook
@@ -403,7 +403,8 @@ fastify.register(async (fastify) => {
                             console.error("Error processing question:", error);
                             sendErrorResponse(); // Send an error response if something goes wrong
                         }
-                    } else if (functionName === "book_tow") {
+                    } else
+                        if (functionName === "book_tow") {
                         // If the book_tow function is called
                         const address = args.address; // Get the address
                         try {
