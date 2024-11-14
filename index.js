@@ -38,14 +38,14 @@ You are an AI assistant named Sophie, working at Voiza Restaurant. Your role is 
 ### Order Handling
 1. For new orders, confirm each item and quantity.
 2. To retrieve an order, use the \`get_order\` function with the  customer phone number.
-3.Use the function \`question_and_answer\` to respond to common customer queries.
+3.Use the function \`get_menu_categories\` to respond to common customer queries on the menu.
 `;
 
 // Some default constants used throughout the application
 const VOICE = "alloy"; // The voice for AI responses
 const PORT = process.env.PORT || 5050; // Set the port for the server (from environment or default to 5050)
 const ROUTE_URL =
-    "https://451f-68-99-227-40.ngrok-free.app/rest/voizawebhook/v1/route";
+    "https://67ef-68-99-227-40.ngrok-free.app/rest/voizawebhook/v1/route";
 const ORDER_WEBHOOK_URL =
     "https://a69e-68-99-227-40.ngrok-free.app/rest/voizaorderswebhook/v1/order";
 
@@ -69,10 +69,10 @@ fastify.all("/incoming-call", async (request, reply) => {
 
     // Get all incoming call details from the request body or query string
     const twilioParams = request.body || request.query;
-    //console.log(
-    //  "Twilio Inbound Details:",
-    // JSON.stringify(twilioParams, null, 2),
-    //   ); // Log call details
+    console.log(
+        "Twilio Inbound Details:",
+        JSON.stringify(twilioParams, null, 2),
+    ); // Log call details
 
     // Extract caller's number and session ID (CallSid)
     const callerNumber = twilioParams.From || "Unknown"; // Caller phone number (default to 'Unknown' if missing)
@@ -80,14 +80,19 @@ fastify.all("/incoming-call", async (request, reply) => {
     let localNumber = callerNumber.startsWith("+1")
         ? callerNumber.substring(2)
         : callerNumber;
+
+    const businessNbr = twilioParams.To;
+    let localbusNumber = businessNbr.startsWith("+1")
+        ? businessNbr.substring(2)
+        : businessNbr;
     // Use Twilio's CallSid as a unique session ID
     console.log("Caller Number:", localNumber);
     console.log("Session ID (CallSid):", sessionId);
-
+    console.log("businessNbr:", businessNbr);
     // Send the caller's number to Make.com webhook to get a personalized first message
     let firstMessage =
         "Welcome to Voiza Restaurant. How can I assist you today?"; // Default first message
-
+    let ThreadID = "";
     try {
         // Send a POST request to Make.com webhook to get a customized message for the caller
 
@@ -97,8 +102,11 @@ fastify.all("/incoming-call", async (request, reply) => {
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                RouteID: "1", // Example data
-                data1: "New order received", // Additional data to send
+                RouteID: "0", // Example data
+                callerNbr: localNumber,
+                busNbr: localbusNumber,
+                data: "empty",
+                ThreadID: sessionId, // Additional data to send
             }),
         });
 
@@ -108,11 +116,23 @@ fastify.all("/incoming-call", async (request, reply) => {
             try {
                 const responseData = JSON.parse(responseText); // Try to parse the response as JSON
                 if (responseData && responseData.Message) {
-                    //  firstMessage = responseData.Message; // If there's a firstMessage in the response, use it
+                    firstMessage = responseData.Message;
+                    firstMessage =
+                        firstMessage +
+                        " The localNumber is " +
+                        localNumber +
+                        " and the businessNbr is " +
+                        localbusNumber;
+                    // If there's a firstMessage in the response, use it
                     console.log(
                         "Parsed firstMessage from Voiza:",
                         firstMessage,
                     );
+                }
+
+                if (responseData && responseData.ThreadID) {
+                    ThreadID = responseData.ThreadID; // If there's a firstMessage in the response, use it
+                    console.log("Parsed ThreadID from Voiza:", ThreadID);
                 }
             } catch (parseError) {
                 console.error("Error parsing webhook response:", parseError); // Log any errors while parsing the response
@@ -132,9 +152,11 @@ fastify.all("/incoming-call", async (request, reply) => {
     let session = {
         transcript: "", // Store the conversation transcript here
         streamSid: null, // This will be set when the media stream starts
-        callerNumber: localNumber, // Store the caller's number
+        callerNumber: localNumber,
+        businessNumber: localbusNumber, // Store the caller's number
         callDetails: twilioParams, // Save the Twilio call details
-        firstMessage: firstMessage, // Save the personalized first message
+        firstMessage: firstMessage,
+        ThreadID: ThreadID, // Save the personalized first message
     };
     sessions.set(sessionId, session); // Add the session to the sessions Map
 
@@ -144,7 +166,9 @@ fastify.all("/incoming-call", async (request, reply) => {
                               <Connect>
                                   <Stream url="wss://${request.headers.host}/media-stream">  // WebSocket URL for media stream
                                         <Parameter name="firstMessage" value="${firstMessage}" />  // Send the first message as a parameter
-                                        <Parameter name="callerNumber" value="${callerNumber}" />  // Send caller number as a parameter
+                                        <Parameter name="callerNumber" value="${localNumber}" />  // Send caller number as a parameter
+                                           <Parameter name="businessNumber" value="${localbusNumber}" />  // Send caller number as a parameter
+                                         <Parameter name="ThreadID" value="${ThreadID}" />  // Send caller number as a parameter
                                   </Stream>
                               </Connect>
                           </Response>`;
@@ -206,7 +230,7 @@ fastify.register(async (fastify) => {
                         // Define the tools (functions) the AI can use
                         {
                             type: "function",
-                            name: "question_and_answer",
+                            name: "get_menu_categories",
                             description:
                                 "Get answers to customer questions about menu items ",
                             parameters: {
@@ -299,9 +323,16 @@ fastify.register(async (fastify) => {
                     console.log("Custom Parameters:", customParameters);
 
                     // Capture callerNumber and firstMessage from custom parameters
-                    const callerNumber =
-                        customParameters?.callerNumber || "Unknown";
-                    session.callerNumber = callerNumber; // Store the caller number in the session
+                    const callerNumber = customParameters?.callerNumber || "";
+
+                    const businessNumber =
+                        customParameters?.businessNumber || "";
+                    const ThreadID = customParameters?.ThreadID || "";
+
+                    session.callerNumber = callerNumber;
+                    session.businessNumber = businessNumber;
+                    session.ThreadID = ThreadID;
+                    // Store the caller number in the session
                     firstMessage =
                         customParameters?.firstMessage ||
                         "Hello, how can I assist you?"; // Set the first message
@@ -366,17 +397,23 @@ fastify.register(async (fastify) => {
                 // Handle function calls (for Q&A and booking a tow)
                 if (response.type === "response.function_call_arguments.done") {
                     console.log("Function called:", response);
+
+                    console.log("Session for the function :", session);
                     const functionName = response.name;
                     const callID = response.call_id;
                     const args = JSON.parse(response.arguments); // Get the arguments passed to the function
-                    if (functionName === "question_and_answer") {
+                    if (functionName === "get_menu_categories") {
                         // If the Q&A function is called
                         const question = args.question; // Get the question
+                        const callerNumber = session.callerNumber;
+                        const businessNumber = session.businessNumber;
                         try {
                             const webhookResponse = await sendToWebhook({
-                                RouteID: "1", // Route 3 for Q&A
-                                data1: question,
-                                data2: threadId,
+                                RouteID: "1", // Example data
+                                callerNbr: callerNumber,
+                                busNbr: businessNumber,
+                                data: "empty",
+                                threadId: session.ThreadID, // Additional data to send
                             });
 
                             console.log("Webhook response 2:", webhookResponse);
@@ -495,7 +532,7 @@ fastify.register(async (fastify) => {
 
                 // Log other relevant events
                 if (LOG_EVENT_TYPES.includes(response.type)) {
-                    // console.log(`Received event: ${response.type}`, response);
+                    console.log(`Received event: ${response.type}`, response);
                 }
             } catch (error) {
                 console.error(

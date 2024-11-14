@@ -87,8 +87,11 @@ fastify.all("/incoming-call", async (request, reply) => {
     // Extract caller's number and session ID (CallSid)
     const callerNumber = twilioParams.From || "Unknown"; // Caller phone number (default to 'Unknown' if missing)
     const sessionId = twilioParams.CallSid; // Use Twilio's CallSid as a unique session ID
-    console.log("Caller Number:", callerNumber);
+    const businessNbr = twilioParams.To;
+
+    console.log("Caller Number 1:", callerNumber);
     console.log("Session ID (CallSid):", sessionId);
+    console.log("businessNbr:", businessNbr);
 
     // Send the caller's number to Make.com webhook to get a personalized first message
     let firstMessage =
@@ -102,7 +105,7 @@ fastify.all("/incoming-call", async (request, reply) => {
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                route: "1", // Route 1 is for getting the first message
+                route: "0", // Route 1 is for getting the first message
                 data1: callerNumber, // Send caller's number
                 data2: "empty", // Extra data (not used here)
             }),
@@ -403,8 +406,7 @@ fastify.register(async (fastify) => {
                             console.error("Error processing question:", error);
                             sendErrorResponse(); // Send an error response if something goes wrong
                         }
-                    } else
-                        if (functionName === "book_tow") {
+                    } else if (functionName === "book_tow") {
                         // If the book_tow function is called
                         const address = args.address; // Get the address
                         try {
